@@ -1,0 +1,27 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>MayuMaze</title>
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+  <div id="app">
+    <h1>MayuMaze</h1>
+    <div id="hud">
+      <span>Level: <strong id="level-display">1</strong></span>
+      <span>Time: <strong id="timer-display">0s</strong></span>
+      <span>Moves: <strong id="moves-display">0</strong></span>
+    </div>
+    <canvas id="maze-canvas"></canvas>
+    <div id="message" class="hidden"></div>
+    <div id="controls">
+      <button id="new-game-btn">New Game</button>
+      <button id="solve-btn">Hint</button>
+    </div>
+    <div id="instructions">W / Up: forward &nbsp;·&nbsp; S / Down: back &nbsp;·&nbsp; A / Left: turn left &nbsp;·&nbsp; D / Right: turn right &nbsp;·&nbsp; Reach the <span class="goal-color">teal exit</span>.</div>
+  </div>
+  <script src="maze.js"></script>
+</body>
+</html>
