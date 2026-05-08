@@ -240,7 +240,7 @@ function render() {
   ctx.stroke();
 
   renderMinimap(hintPath);
-  renderDpad();
+  renderGyroHint();
 }
 
 function renderMinimap(hintPath) {
@@ -304,76 +304,53 @@ function renderMinimap(hintPath) {
 
 const keys = {};
 
-// ── D-pad ────────────────────────────────────────────────────────────────────
-const DPAD_CX = 95, DPAD_CY = H - 88, DPAD_R = 75;
+// ── Gyroscope + tap controls ─────────────────────────────────────────────────
+let gyroGamma      = 0;     // calibrated left/right tilt in degrees
+let gyroBaseline   = 0;
+let gyroCalibrated = false;
+let gyroListening  = false;
+let touchFwd       = false; // tap & hold anywhere = move forward
+let activeTouches  = 0;
 
-const dpad = { up: false, down: false, left: false, right: false };
-const dpadTouches = {}; // touchId → direction string
-
-function toCanvas(clientX, clientY) {
-  const r = canvas.getBoundingClientRect();
-  return { x: (clientX - r.left) * W / r.width, y: (clientY - r.top) * H / r.height };
+function onDeviceOrientation(e) {
+  const g = e.gamma ?? 0;
+  if (!gyroCalibrated) { gyroBaseline = g; gyroCalibrated = true; }
+  gyroGamma = g - gyroBaseline;
 }
 
-function getDpadDir(cx, cy) {
-  const dx = cx - DPAD_CX, dy = cy - DPAD_CY;
-  if (Math.hypot(dx, dy) > DPAD_R) return null;
-  return Math.abs(dy) >= Math.abs(dx)
-    ? (dy <= 0 ? 'up' : 'down')
-    : (dx <  0 ? 'left' : 'right');
-}
-
-function renderDpad() {
-  const cx = DPAD_CX, cy = DPAD_CY, R = DPAD_R;
-  ctx.save();
-
-  // Outer circle background
-  ctx.beginPath();
-  ctx.arc(cx, cy, R, 0, Math.PI * 2);
-  ctx.fillStyle   = 'rgba(0,0,0,0.65)';
-  ctx.strokeStyle = 'rgba(255,255,255,0.55)';
-  ctx.lineWidth = 2.5;
-  ctx.fill(); ctx.stroke();
-
-  // 4 arrow triangles
-  const ARROWS = [
-    { key: 'up',    nx:  0, ny: -1 },
-    { key: 'down',  nx:  0, ny:  1 },
-    { key: 'left',  nx: -1, ny:  0 },
-    { key: 'right', nx:  1, ny:  0 },
-  ];
-  const tipDist  = R * 0.72;
-  const baseDist = R * 0.30;
-  const baseHalf = R * 0.30;
-
-  for (const { key, nx, ny } of ARROWS) {
-    const px = -ny, py = nx;
-    const tipX   = cx + nx * tipDist;
-    const tipY   = cy + ny * tipDist;
-    const base1X = cx + nx * baseDist + px * baseHalf;
-    const base1Y = cy + ny * baseDist + py * baseHalf;
-    const base2X = cx + nx * baseDist - px * baseHalf;
-    const base2Y = cy + ny * baseDist - py * baseHalf;
-
-    ctx.beginPath();
-    ctx.moveTo(tipX, tipY);
-    ctx.lineTo(base1X, base1Y);
-    ctx.lineTo(base2X, base2Y);
-    ctx.closePath();
-
-    ctx.fillStyle   = dpad[key] ? 'rgba(255,255,255,1.0)' : 'rgba(255,255,255,0.75)';
-    ctx.strokeStyle = dpad[key] ? 'rgba(255,200,50,0.9)'  : 'rgba(0,0,0,0.6)';
-    ctx.lineWidth = 1.5;
-    ctx.fill();
-    ctx.stroke();
+function setupGyro() {
+  if (gyroListening) return;
+  gyroListening = true;
+  if (typeof DeviceOrientationEvent !== 'undefined' &&
+      typeof DeviceOrientationEvent.requestPermission === 'function') {
+    // iOS 13+ requires explicit permission
+    DeviceOrientationEvent.requestPermission()
+      .then(p => { if (p === 'granted') window.addEventListener('deviceorientation', onDeviceOrientation); })
+      .catch(() => {});
+  } else {
+    window.addEventListener('deviceorientation', onDeviceOrientation);
   }
+}
 
-  // Centre dot
-  ctx.beginPath();
-  ctx.arc(cx, cy, R * 0.14, 0, Math.PI * 2);
-  ctx.fillStyle = 'rgba(255,255,255,0.25)';
-  ctx.fill();
+function renderGyroHint() {
+  const barW = 110, barH = 7, by = H - 15;
+  const bx = (W - barW) / 2;
+  const tilt = Math.max(-1, Math.min(1, gyroGamma / 28));
 
+  ctx.save();
+  ctx.globalAlpha = 0.55;
+  ctx.fillStyle = 'rgba(0,0,0,0.45)';
+  ctx.fillRect(bx, by, barW, barH);
+
+  const knobX = W / 2 + tilt * (barW / 2 - 7);
+  ctx.fillStyle = Math.abs(gyroGamma) > 5 ? '#ff6b6b' : '#4ecdc4';
+  ctx.fillRect(knobX - 7, by, 14, barH);
+
+  ctx.globalAlpha = touchFwd ? 0.7 : 0.28;
+  ctx.fillStyle = '#fffffe';
+  ctx.font = '9px sans-serif';
+  ctx.textAlign = 'center';
+  ctx.fillText(touchFwd ? '▶ moving' : 'tilt ←→  tap & hold to move', W / 2, by - 5);
   ctx.restore();
 }
 
@@ -394,6 +371,7 @@ function initLevel(lvl) {
   clearTimeout(state.hintTimeout);
   cancelAnimationFrame(rafId);
   resetHintButton();
+  gyroCalibrated = false; // recalibrate tilt baseline for new level
 
   const size = 7 + (lvl - 1) * 2;
   const maze = generateMaze(size, size);
@@ -430,16 +408,18 @@ function update() {
   const {player, maze} = state;
   const spd = 0.04, turn = 0.045;
 
-  // Turning: keyboard + d-pad left/right
+  // Turning: keyboard + gyroscope (deadzone 5°, full speed at 30°)
   let turnAmt = 0;
-  if (keys['ArrowLeft']  || keys['a'] || keys['A'] || dpad.left)  turnAmt -= 1;
-  if (keys['ArrowRight'] || keys['d'] || keys['D'] || dpad.right) turnAmt += 1;
+  if (keys['ArrowLeft']  || keys['a'] || keys['A']) turnAmt -= 1;
+  if (keys['ArrowRight'] || keys['d'] || keys['D']) turnAmt += 1;
+  const absG = Math.abs(gyroGamma);
+  if (absG > 5) turnAmt += Math.sign(gyroGamma) * Math.min(1, (absG - 5) / 25);
   player.angle += turn * Math.max(-1, Math.min(1, turnAmt));
 
-  // Movement: keyboard + d-pad up/down
+  // Movement: keyboard + tap & hold
   let moveAmt = 0;
-  if (keys['ArrowUp']   || keys['w'] || keys['W'] || dpad.up)   moveAmt += 1;
-  if (keys['ArrowDown'] || keys['s'] || keys['S'] || dpad.down) moveAmt -= 1;
+  if (keys['ArrowUp']   || keys['w'] || keys['W'] || touchFwd) moveAmt += 1;
+  if (keys['ArrowDown'] || keys['s'] || keys['S'])              moveAmt -= 1;
   const move = Math.max(-1, Math.min(1, moveAmt)) * spd;
 
   if (move !== 0) {
@@ -520,36 +500,23 @@ document.addEventListener('keydown', e => {
 });
 document.addEventListener('keyup', e => { keys[e.key] = false; });
 
-// D-pad touch handlers
+// Touch handlers: tap & hold anywhere = move forward; first touch requests gyro permission
 canvas.addEventListener('touchstart', e => {
-  for (const t of e.changedTouches) {
-    const {x, y} = toCanvas(t.clientX, t.clientY);
-    const dir = getDpadDir(x, y);
-    if (dir) { dpad[dir] = true; dpadTouches[t.identifier] = dir; }
-  }
-  e.preventDefault();
-}, { passive: false });
-
-canvas.addEventListener('touchmove', e => {
-  for (const t of e.changedTouches) {
-    const prev = dpadTouches[t.identifier];
-    const {x, y} = toCanvas(t.clientX, t.clientY);
-    const next = getDpadDir(x, y);
-    if (prev !== next) {
-      if (prev) dpad[prev] = false;
-      if (next) dpad[next] = true;
-      dpadTouches[t.identifier] = next;
-    }
-  }
+  setupGyro();
+  activeTouches += e.changedTouches.length;
+  touchFwd = true;
   e.preventDefault();
 }, { passive: false });
 
 canvas.addEventListener('touchend', e => {
-  for (const t of e.changedTouches) {
-    const dir = dpadTouches[t.identifier];
-    if (dir) dpad[dir] = false;
-    delete dpadTouches[t.identifier];
-  }
+  activeTouches = Math.max(0, activeTouches - e.changedTouches.length);
+  touchFwd = activeTouches > 0;
+  e.preventDefault();
+}, { passive: false });
+
+canvas.addEventListener('touchcancel', e => {
+  activeTouches = Math.max(0, activeTouches - e.changedTouches.length);
+  touchFwd = activeTouches > 0;
   e.preventDefault();
 }, { passive: false });
 
