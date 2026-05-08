@@ -304,12 +304,13 @@ function renderMinimap(hintPath) {
 
 const keys = {};
 
-// ── Gyroscope + tap controls ─────────────────────────────────────────────────
-let gyroGamma      = 0;     // calibrated left/right tilt in degrees
+// ── Gyroscope + tap controls (mobile) / mouse controls (desktop) ─────────────
+let gyroGamma      = 0;     // calibrated left/right tilt in degrees (mobile)
 let gyroBaseline   = 0;
 let gyroCalibrated = false;
 let gyroListening  = false;
-let touchFwd       = false; // tap & hold anywhere = move forward
+let mouseGamma     = 0;     // simulated tilt from mouse X position (desktop)
+let touchFwd       = false; // tap & hold (mobile) or mouse button hold (desktop)
 let activeTouches  = 0;
 
 function onDeviceOrientation(e) {
@@ -335,7 +336,8 @@ function setupGyro() {
 function renderGyroHint() {
   const barW = 110, barH = 7, by = H - 15;
   const bx = (W - barW) / 2;
-  const tilt = Math.max(-1, Math.min(1, gyroGamma / 28));
+  const combined = gyroGamma + mouseGamma;
+  const tilt = Math.max(-1, Math.min(1, combined / 28));
 
   ctx.save();
   ctx.globalAlpha = 0.55;
@@ -343,14 +345,14 @@ function renderGyroHint() {
   ctx.fillRect(bx, by, barW, barH);
 
   const knobX = W / 2 + tilt * (barW / 2 - 7);
-  ctx.fillStyle = Math.abs(gyroGamma) > 5 ? '#ff6b6b' : '#4ecdc4';
+  ctx.fillStyle = Math.abs(combined) > 5 ? '#ff6b6b' : '#4ecdc4';
   ctx.fillRect(knobX - 7, by, 14, barH);
 
   ctx.globalAlpha = touchFwd ? 0.7 : 0.28;
   ctx.fillStyle = '#fffffe';
   ctx.font = '9px sans-serif';
   ctx.textAlign = 'center';
-  ctx.fillText(touchFwd ? '▶ moving' : 'tilt ←→  tap & hold to move', W / 2, by - 5);
+  ctx.fillText(touchFwd ? '▶ moving' : 'aim ←→  tap / click & hold to move', W / 2, by - 5);
   ctx.restore();
 }
 
@@ -408,12 +410,13 @@ function update() {
   const {player, maze} = state;
   const spd = 0.04, turn = 0.045;
 
-  // Turning: keyboard + gyroscope (deadzone 5°, full speed at 30°)
+  // Turning: keyboard + gyroscope (mobile) or mouse position (desktop)
   let turnAmt = 0;
   if (keys['ArrowLeft']  || keys['a'] || keys['A']) turnAmt -= 1;
   if (keys['ArrowRight'] || keys['d'] || keys['D']) turnAmt += 1;
-  const absG = Math.abs(gyroGamma);
-  if (absG > 5) turnAmt += Math.sign(gyroGamma) * Math.min(1, (absG - 5) / 25);
+  const effectiveGamma = gyroGamma + mouseGamma; // one will be 0 depending on device
+  const absG = Math.abs(effectiveGamma);
+  if (absG > 5) turnAmt += Math.sign(effectiveGamma) * Math.min(1, (absG - 5) / 25);
   player.angle += turn * Math.max(-1, Math.min(1, turnAmt));
 
   // Movement: keyboard + tap & hold
@@ -519,6 +522,16 @@ canvas.addEventListener('touchcancel', e => {
   touchFwd = activeTouches > 0;
   e.preventDefault();
 }, { passive: false });
+
+// Mouse handlers: hover to steer (mirrors gyro), click & hold to move forward
+canvas.addEventListener('mousemove', e => {
+  const r = canvas.getBoundingClientRect();
+  const mx = (e.clientX - r.left) * W / r.width;
+  mouseGamma = ((mx - W / 2) / (W / 2)) * 30; // -30 to +30 degrees equivalent
+});
+canvas.addEventListener('mouseleave', () => { mouseGamma = 0; });
+canvas.addEventListener('mousedown',  e => { if (e.button === 0) touchFwd = true; });
+canvas.addEventListener('mouseup',    e => { if (e.button === 0) touchFwd = false; });
 
 document.getElementById('new-game-btn').addEventListener('click', () => initLevel(1));
 document.getElementById('solve-btn').addEventListener('click', showHint);
